@@ -40,13 +40,12 @@ bool isNonNullableStoredColumn(const QueryTreeNodePtr & node, const ContextPtr &
     /// Restrict this rewrite to ordinary stored `MergeTree` columns.
     const auto source = column_node->getColumnSourceOrNull();
     const auto * table_node = source ? source->as<TableNode>() : nullptr;
-    const auto * merge_tree = table_node ? dynamic_cast<const MergeTreeData *>(table_node->getStorage().get()) : nullptr;
-    if (!merge_tree)
+    if (!table_node)
         return false;
 
     const auto & snapshot = table_node->getStorageSnapshot();
-    /// On-the-fly mutations can also evaluate expressions while reading a column.
-    if (!table_node->getStorage()->supportsTrivialCountOptimization(snapshot, context))
+    const auto * merge_tree = dynamic_cast<const MergeTreeData *>(&snapshot->storage);
+    if (!merge_tree || &snapshot->storage != table_node->getStorage().get())
         return false;
 
     const auto * column = snapshot->metadata->getColumns().tryGet(column_node->getColumnName());
@@ -56,8 +55,10 @@ bool isNonNullableStoredColumn(const QueryTreeNodePtr & node, const ContextPtr &
         return false;
 
     const auto & snapshot_data = assert_cast<const MergeTreeData::SnapshotData &>(*snapshot->data);
-    if (!snapshot_data.parts || !snapshot_data.mutations_snapshot
-        || snapshot_data.mutations_snapshot->hasAlterMutations() || snapshot_data.mutations_snapshot->hasPatchParts()
+    /// On-the-fly mutations can throw while reading a column, and `count()` may read any column, not only this one.
+    if (!snapshot_data.parts || !snapshot_data.mutations_snapshot || snapshot_data.mutations_snapshot->hasDataMutations()
+        || snapshot_data.mutations_snapshot->hasAlterMutations()
+        || snapshot_data.mutations_snapshot->getColumnsChangedOnFly().contains(column_node->getColumnName())
         || merge_tree->hasEnabledMaskingPolicies(context))
         return false;
 
@@ -65,7 +66,7 @@ bool isNonNullableStoredColumn(const QueryTreeNodePtr & node, const ContextPtr &
     /// Inspect the captured parts, since a mutation can finish after the snapshot was taken.
     for (const auto & part : *snapshot_data.parts)
     {
-        const auto stored_column = part.data_part->getColumns().tryGetByName(column_node->getColumnName());
+        const auto stored_column = part.data_part->tryGetColumn(column_node->getColumnName());
         if (!stored_column || !stored_column->type->equals(*type))
             return false;
     }

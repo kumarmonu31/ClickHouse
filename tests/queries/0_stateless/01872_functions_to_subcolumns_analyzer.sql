@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS t_func_to_subcolumns;
 
 SET enable_analyzer = 1;
 SET optimize_functions_to_subcolumns = 1;
+SET optimize_normalize_count_variants = 0;
 
 -- Pin Map serialization to `basic` so `m.keys`/`m.values` subcolumns return keys in
 -- insertion order. CI randomizes `map_serialization_version_for_zero_level_parts` and
